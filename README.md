@@ -4,8 +4,8 @@
 
 **Author:** T. Sato, MyAuberge K.K.
 **Date:** 27 August 2026; revised 14 October 2026 (aligned to WISE `-03`; disclosure control;
-suspension) and 30 October 2026 (`txn` and Transactional Access Tokens; revocation closure) — see
-Document History
+suspension), 19 November 2026 (relationship to OAuth, RAR and Transactional Access Tokens) and
+21 November 2026 (aligned to WISE `-04`) — see Document History
 **Status:** Initial review draft — not yet submitted, prepared for discussion
 
 **Base URI:** `https://schemas.openid.net/secevent/mandate/event-type/` *(placeholder — open to
@@ -94,13 +94,12 @@ inherits the following from WISE and the core SSF Framework rather than redefini
 
 - The `uri`/`wimse://` workload subject identifier format (§3), used here for the `workload`
   member of this profile's Complex Subject.
-- The Common Claims pattern (§2), matching WISE `-03`: `event_timestamp` as a common
+- The Common Claims pattern (§2), matching WISE `-04`: `event_timestamp` as a common
   *mandatory* claim; `reason_admin`, `reason_user`, and `initiating_entity` as common optional
   claims with the localizable-object structure WISE inherits from CAEP; and `effective_at` as a
   common optional claim with WISE's semantics.
-- WISE's rule for correlating SETs that arise from one occurrence through a shared `txn` claim,
-  extended by §2.3 to SETs about a single transaction, where `txn` is the transaction's own
-  identifier as [RFC8417] intends.
+- WISE's rule for correlating SETs that arise from one occurrence through a shared `txn` claim
+  (§2.3).
 - The base SET/JWT envelope, `iss`/`aud`/`iat`/`jti` claims, and the confidentiality and
   replay/freshness requirements of WISE's Security Considerations (§5.1).
 
@@ -108,12 +107,14 @@ MLE is a companion profile, not a WISE profiling specification. WISE rules that 
 "events defined by... profiling specifications" (notably its Compromise Response rule) therefore
 do not reach MLE automatically; where MLE needs the same behavior, it states it itself (§5.4).
 
-**Boundary with WISE's trust-level events.** WISE's `workload-degraded` reports the trust domain
-authority's decision to reduce trust in a *workload* as a whole, affecting everything it does.
-An MLE event reports a change to *one grant of authority* held by that workload, made by or on
-behalf of the principal who granted it. A workload can be fully trusted while one of its
-mandates is revoked, and degraded while its mandates are unchanged. Deployments SHOULD NOT use
-either profile's events to stand in for the other's. The same holds for WISE's
+**Boundary with WISE's trust-level and policy events.** WISE's `workload-trust-level-change`
+reports the trust domain authority's decision to move a *workload* as a whole to a different
+trust level (`full`, `reduced`, `restricted`, `minimal`), affecting everything it does. An MLE
+event reports a change to *one grant of authority* held by that workload, made by or on behalf of
+the principal who granted it. A workload can be at `full` trust while one of its mandates is
+revoked, and at `restricted` while its mandates are unchanged. Likewise, WISE's `policy-changed`
+reports a change to a trust domain's issuance, posture-evaluation or validation policy, not to
+any one grant. Deployments SHOULD NOT use either profile's events to stand in for the other's. The same holds for WISE's
 `workload-disabled`/`workload-enabled` and MLE's `mandate-suspended`/`mandate-resumed`
 (§4.7, §4.8): the first pair pauses a workload, the second one grant of authority.
 
@@ -121,9 +122,9 @@ What this profile adds, that WISE does not cover: mandate — as opposed to cred
 events, and a `principal` Complex Subject member representing the human or organization the
 mandate traces back to, which WISE's workload-only subject has no equivalent for. A deployment
 running both profiles is expected to correlate a `mandate-executed` event here with the WISE
-credential events describing the workload presenting that credential. Correlation between a
-`mandate-executed` event and the token it reports uses the SET `txn` claim (§2.3); correlation
-with WISE credential events beyond that remains a deployment-level integration question.
+credential events describing the workload presenting that credential, via `mandate_id` and/or the
+issued credential's own identifier — this profile does not define that correlation mechanism
+further; it is a deployment-level integration question.
 
 ### 1.3. Terminology
 
@@ -144,8 +145,7 @@ whole profile: **Mission is the "what," Mandate is the "may."**
 specific call or transaction. A mandate is a standing grant; a credential is its momentary
 presentation. `mandate-executed` (below) is where this profile makes that distinction concrete —
 one mandate may produce many credentials over its lifetime (a new one per transaction), of
-several possible types (opaque token, JWT, Transactional Access Token, Transaction Token), and
-revoking the mandate does not
+several possible types (opaque token, JWT, Transaction Token), and revoking the mandate does not
 retroactively invalidate a credential already issued from it — see the Notes under
 `mandate-revoked`.
 
@@ -154,7 +154,96 @@ of authority from a principal to a workload, distinct from the workload's missio
 trying to accomplish) and from any credential issued under it (the per-transaction artifact
 proving that authority at the point of use).*
 
-### 1.4. Notational Conventions
+### 1.4. Relationship to Other Specifications
+
+MLE is a signaling layer. It does not define what a mandate is made of, how one is issued, or
+how a credential is minted from one; other specifications do, and MLE is designed to sit on top
+of them. This section states where MLE stands relative to each.
+
+**Shared Signals profiles (CAEP, RISC, WISE).** All four use the same SSF transport, stream
+management and SET envelope; they differ in subject. CAEP signals changes to a user's *session*,
+RISC to a user's *account*, WISE to a *workload's credential, trust material and posture*, and
+MLE to a *grant of authority* held by a workload. A mandate change is not expressible as a CAEP
+`session-revoked` (revoking the agent's session would also end every other mandate it holds) or
+as `token-claims-change` (which concerns one token, not a standing grant from which many tokens
+are minted), and CAEP has no subject for the principal–workload pair or for parent/child
+delegation. The boundary with WISE is stated in §1.2.
+
+**OAuth grants and Rich Authorization Requests [RFC9396].** Where mandates are issued by an
+OAuth authorization server, the natural mandate is the *grant*: the authority the resource owner
+or client policy approved, expressed as granted `authorization_details` (and/or `scope`).
+Grant Management for OAuth 2.0 [GRANT-MGMT] gives that grant an identifier (`grant_id`), which
+a Transmitter can use as `mandate_id`, and a query/revoke API that Clients *pull*. MLE is the
+*push* counterpart: it tells every party relying on the grant that it changed. Several RAR
+properties shape how MLE is applied to grants:
+
+- RAR §6: the AS checks, on every token request, that the underlying grant still allows the
+  requested `authorization_details`. That check is the enforcement point MLE relies on in §5.5:
+  once a mandate is revoked or suspended, the next `mandate-executed` is refused.
+- RAR §6.1: there is no generic way to compare two `authorization_details` values; "more" and
+  "less" are defined per type. `change_class` (§4.5) and `narrowing_violation` (§4.9) are
+  therefore computed by the issuing authority using the mandate format's own comparison rules,
+  never by the Receiver from the event.
+- RAR §6 also lets a client obtain a token with *fewer* rights than the grant without changing
+  the grant. Such a token is a narrower credential, not a narrowed mandate, and produces no
+  `mandate-rotated`.
+- RAR §7.1: the AS may enrich the granted `authorization_details` beyond what was requested, so
+  a request digest (`mandate-requested`) and a grant digest (`mandate-granted`) are expected to
+  differ.
+- RAR §9.1 and §13: the AS filters `authorization_details` per audience and shares them on a
+  need-to-know basis. MLE's disclosure rules (§4.11) apply the same principle to lifecycle events.
+
+**Transaction Tokens [TXN-TOKENS] and Transactional Access Tokens [TXN-AT].** These are
+credentials minted under a mandate, one per transaction, and are what `mandate-executed`
+reports (§4.4). A Transactional Access Token is issued by the AS to one resource server after a
+fresh policy decision, with a short lifetime (the current draft says it SHOULD NOT exceed 300
+seconds); the resource server may exchange it for a Transaction Token inside its own trust
+domain. In MLE terms, consent and client authority are the durable mandate and the tokens are
+per-transaction credentials. Their short lifetime is what bounds the exposure window of §5.5,
+and MLE is what reaches resource servers that hold such tokens when the authority behind them
+changes. Neither token format has a notion of delegation lineage between grants; MLE's
+`parent_mandate_id` and cascade semantics supply the signaling half of that, while narrowing
+enforcement remains with the issuing mechanism (§5.2).
+
+**Token Exchange [RFC8693].** Delegation to a sub-agent is commonly performed by token exchange
+with an actor (`act`). Where the exchange creates a new standing grant rather than a single
+token, that grant is a child mandate and is announced with `mandate-granted`
+(`mandate_type: child`).
+
+**Revocation and status mechanisms.** OAuth Token Revocation [RFC7009] lets a client ask the AS
+to invalidate a token and, where applicable, its grant; proposals for agent-level cascade
+revocation [CHEN-REVOCATION] and for revocation closure [WATTS-CLOSURE] extend that request side.
+Token Status List [STATUS-LIST] lets a relying party *pull* the status of a token, including a
+`SUSPENDED` state. MLE is complementary to all of them: it does not request a revocation and
+does not replace a status check. It pushes the fact that a mandate's state changed to parties
+that would otherwise only learn of it at their next pull, and it gives `mandate-resumed` a
+defined place to confirm status (§4.8). A deployment can use a status list as that confirmation
+channel.
+
+**Delegation-revocation events and per-action approval.** A proposal for OAuth
+[NANDAKUMAR-REVOCATION] defines a `delegation-revoked` SET whose subject is a single delegated
+*token*, identified by its `iss` and `jti`. Each holder relays the event to the holders of tokens
+it issued, and verifiers check chain status as a backstop. Its companion [PACE-AUTHZ] issues
+single-use approval tokens for one approved action, described as a RAR `agent_action`. The two
+efforts overlap with MLE on cascade revocation but differ in what they name. They name a token
+chain; MLE names the standing grant from which tokens are minted. They also define no
+suspension, resumption, rotation or disclosure classes. Where a mandate is itself carried as a
+single delegated token, a Transmitter can name it in `mandate-revoked` with the same (`iss`,
+`jti`) pair it would use in `delegation-revoked`, and both events SHOULD share a SET `txn`
+(§2.3). Whether MLE should adopt that subject format directly is an open question (§8).
+
+**Mandate formats.** Several efforts define what a mandate *contains*: the Agent Payments
+Protocol [AP2] defines Intent, Cart and Payment Mandates as signed verifiable credentials; a
+problem statement on verifiable human mandates [YOSSIF-MANDATE] sets requirements for binding
+an agent's actions to constraints a human authorized; and deployments define their own signed
+mandate tokens. MLE is neutral among them. The working definition in §1.3 is functional only —
+a mandate is whatever standing grant of authority the issuing authority manages — and MLE
+carries a mandate's identifier and digest, never its schema. Note that "mandate" is used
+differently across these efforts: an AP2 Intent Mandate records what the user wants done (the
+"what" of §1.3) as well as the bounds within which the agent may act unattended (the "may"); it
+is the latter that MLE events concern.
+
+### 1.5. Notational Conventions
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT",
 "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as
@@ -175,7 +264,7 @@ Every MLE event payload MUST include:
   identifies when the event occurred; for an event reporting a decision or detection, when the
   decision was made or the condition detected. It is a member of the individual event payload,
   not a top-level SET claim, and may differ from the SET's `iat` and from `effective_at`. This is
-  the same definition WISE `-03` adopts. Receivers rely on it to order state changes for the
+  the same definition WISE `-04` adopts. Receivers rely on it to order state changes for the
   same mandate (§5.8).
 
 ### 2.2. Common Optional Claims
@@ -193,12 +282,22 @@ form WISE reuses them; `effective_at` is defined as in [WISE]:
   `admin`, `user`, `policy`, or `system`.
 - **`effective_at`** — OPTIONAL. A JSON number containing a NumericDate identifying when the
   change described by the event takes effect. A member of the event payload, not a top-level SET
-  claim. It MAY be earlier than, equal to, or later than the SET's `iat`. If omitted, the change
+  claim. It MAY be earlier than or equal to the SET's `iat`, and MUST NOT be later: a SET
+  reports something that has already happened [RFC8417], and a future-dated change would leave
+  every Receiver holding pending state that no event in this profile could cancel. An earlier
+  `effective_at` says the change took effect before it was reported — for example, that a
+  mandate's authority ended at the moment of a compromise rather than when it was detected — and
+  a Receiver SHOULD review what it accepted under the mandate since then. If omitted, the change
   MUST be treated as effective as of the SET's `iat`, and a Receiver processing the SET at or
   after that time MUST apply the event-specific processing requirements immediately on receipt.
-  It does not override event-specific processing requirements. A future `effective_at` on
-  `mandate-revoked` expresses a scheduled revocation (e.g. "authority ends at quarter close")
-  without a separate event type.
+  It does not override event-specific processing requirements. A Receiver that receives an
+  `effective_at` later than the SET's `iat` MUST treat it as equal to `iat`.
+
+  A change planned for a future time is not sent in advance. Where the planned change is the end
+  of a mandate's authority (e.g. "authority ends at quarter close"), the issuing authority
+  shortens the mandate's `expiry` and reports it with `mandate-rotated`, `change_class: narrowed`
+  (§4.5) — a fact at the moment it is sent, which a later rotation can reverse. Any other planned
+  change is held by the Transmitter and sent when it takes effect.
 
 When an event in this profile includes `reason_admin` or `reason_user`, the claim MUST use the
 localizable JSON object structure defined above rather than a plain string. The following is a
@@ -211,52 +310,21 @@ non-normative example:
 }
 ```
 
-### 2.3. Transaction Identifier (`txn`) and Correlating Related Events
+### 2.3. Correlating Related Events
 
-[RFC8417] §2.2 defines `txn` as an OPTIONAL transaction identifier used to correlate multiple
-related JWTs, and states that it can be used both in SETs and in JWTs that are not SETs. OAuth
-Transaction Tokens [TXN-TOKENS] and Transactional Access Tokens [TXN-AT] define their own `txn`
-claim by reference to that section. It is one claim with one meaning: an MLE SET and the token a
-mandate produced can carry the same `txn`, and a Receiver can correlate them without any
-knowledge specific to either token format. (Earlier revisions of this profile treated the SET
-`txn` and a token's `txn` as unrelated claims that merely shared a name. That was wrong and is
-withdrawn.)
+One occurrence may produce several SETs: a cascade revocation or suspension produces one event per
+affected mandate, and a compromise may produce a WISE `credential-revoked` alongside MLE
+`mandate-revoked` events. A Transmitter SHOULD set the same value in the OPTIONAL SET `txn`
+(transaction identifier) claim [RFC8417] on all SETs arising from the same occurrence, across
+MLE and WISE event types, so a Receiver can recognize that they share a cause. This is the rule
+WISE `-04` adopts for its own events.
 
-A SET carries a single `txn` value. Transmitters choose it by the scope of the event:
-
-- **Transaction-scoped events** — `mandate-executed`, and `mandate-violation-detected` when it
-  concerns one transaction: the `txn` of the credential the event concerns, as the Receiver sees
-  it. For a Transactional Access Token this is the per-audience value issued for the Receiver's
-  audience ([TXN-AT] §3.3).
-- **Occurrence-scoped events** — all other events defined here, except `mandate-revocation-enforced`:
-  one value per underlying occurrence, shared by every SET that occurrence produces for a given
-  Receiver, across MLE and WISE event types. One occurrence may produce several SETs: a cascade
-  revocation or suspension produces one event per affected mandate, and a compromise may produce a
-  WISE `credential-revoked` alongside MLE `mandate-revoked` events. This is the rule WISE `-03`
-  adopts for its own events. One occurrence can affect many transactions, so no token `txn`
-  applies here.
-- **Acknowledgements** — `mandate-revocation-enforced` (§4.10) carries the `txn` of the
-  `mandate-revoked` SET it acknowledges, exactly as that Receiver received it.
-
-**Per-audience values.** A value that is identical across Receivers lets Receivers in different
-organizations link their records ([RFC8417] §6). Transmitters SHOULD derive occurrence-scoped
-`txn` values per audience. One acceptable construction, following [TXN-AT] §7.6, is
-`txn = BASE64URL(HMAC-SHA-256(K_txn, occurrence_id || UTF8(aud)))`, where `K_txn` is a Transmitter
-secret used only for this purpose. For the same reason, Transmitters SHOULD use a per-audience
-`mandate_id` where a globally stable identifier is not required, applying the same derivation to
-every event sent to a given Receiver.
-
-**One event per SET.** [RFC8417] §2.2 does not allow the `events` claim to carry independent
-logical events. Cascade descendants, and a WISE event paired with MLE events, are separate SETs
-correlated by `txn`, never one SET with several event members.
-
-**Join key.** Because `mandate-executed` carries both the minted token's `txn` and the
-`mandate_id`, a Receiver that receives it can keep an index from `txn` to `mandate_id`. When a
-later `mandate-revoked` or `mandate-suspended` names that `mandate_id` (or, for a cascade, that
-`cascade_root_mandate_id`), the Receiver knows which in-flight tokens it covers and can stop
-honoring them before they expire. This needs no change to the token format. The alternative, an
-authorization server asserting a mandate reference inside the Transactional Access Token, is an
-open question (§8).
+The SET `txn` claim is unrelated to the `txn` claims of OAuth tokens, despite the shared name:
+the `txn` of a Transaction Token [TXN-TOKENS], the transaction identifier a JWT access token may
+carry [RFC9396, §9.1], and the `txn` of a Transactional Access Token [TXN-AT], which differs per
+audience so that only the authorization server can correlate it across resource servers. MLE
+carries such a token's identifier in `mandate-executed`'s `credential_id` (§4.4), never in the
+SET `txn` claim.
 
 ---
 
@@ -321,8 +389,7 @@ profile writes the requirement explicitly rather than leaving it to core-spec si
 - Receivers implementing `mandate-requested`, `mandate-denied`, or `mandate-granted` MUST be
   prepared to accept a Complex Subject. Receivers implementing only the Simple-Subject events
   (`mandate-rotated`, `mandate-revoked`, `mandate-suspended`, `mandate-resumed`,
-  `mandate-violation-detected`, `mandate-executed`, `mandate-revocation-enforced`,
-  `mandate-revocation-closure`) are not required to.
+  `mandate-violation-detected`, `mandate-executed`) are not required to.
 - Such Receivers MUST NOT reject an event solely because its Subject Member is a Complex Subject,
   or because it carries a Subject Member name they do not recognize, and MUST be able to extract
   the `principal` member (this profile's anchor member, playing the role CAEP's `user` plays).
@@ -342,7 +409,7 @@ instead, consistent with how WISE's own Credential Lifecycle events are scoped.
 
 ## 4. Event Types
 
-Examples for events whose default disclosure class is `internal` (§4.13.1) are addressed to an
+Examples for events whose default disclosure class is `internal` (§4.11.1) are addressed to an
 internal policy decision point; examples for `relying` events are addressed to an external
 relying party (the vendor contract system of §1).
 
@@ -362,9 +429,9 @@ separately via `mandate-granted` or `mandate-denied`.
   parent mandate).
 - **`parent_mandate_id`** — OPTIONAL. If `mandate_type` is `child`, the parent mandate being
   delegated from.
-- **`scope_digest`** — OPTIONAL. Digest of the request as recorded by the authority, per §4.13.3.
+- **`scope_digest`** — OPTIONAL. Digest of the request as recorded by the authority, per §4.11.3.
 - **`scope_summary`** — OPTIONAL. Free-text description of the authority requested. Advisory
-  only, and restricted by §4.13.2: it MUST NOT be sent outside the `internal` disclosure class
+  only, and restricted by §4.11.2: it MUST NOT be sent outside the `internal` disclosure class
   unless the disclosure policy for that Receiver permits it.
 
 ```json
@@ -436,12 +503,12 @@ Signals that a new mandate was issued to a workload by a principal.
 - **`parent_mandate_id`** — OPTIONAL. Identifier of the parent mandate, if `mandate_type` is
   `child`.
 - **`scope_ref`** — OPTIONAL. URI from which an authorized Receiver can obtain the authoritative
-  mandate (§4.13.3).
-- **`scope_digest`** — OPTIONAL. Digest of the authoritative mandate artifact (§4.13.3). Lets a
+  mandate (§4.11.3).
+- **`scope_digest`** — OPTIONAL. Digest of the authoritative mandate artifact (§4.11.3). Lets a
   Receiver that already holds the mandate confirm exactly which version this event concerns,
   without the event disclosing its content.
 - **`scope_summary`** — OPTIONAL. Free-text; advisory only, not the authoritative scope
-  definition. Restricted to the `internal` disclosure class unless policy permits (§4.13.2).
+  definition. Restricted to the `internal` disclosure class unless policy permits (§4.11.2).
 - **`expiry`** — OPTIONAL. Expiration time of the mandate (NumericDate).
 
 ```json
@@ -484,35 +551,31 @@ authority; a credential issued at execution time is what actually gets presented
   Possible values:
   - `opaque` — an opaque token.
   - `jwt` — a JSON Web Token.
-  - `txn_access_token` — a Transactional Access Token [TXN-AT]: an access token audienced to a
-    single resource server, carrying a per-audience `txn`. This is the expected value when the
-    Receiver is outside the issuing trust domain.
-  - `txn_token` — a Transaction Token [TXN-TOKENS]. A Txn-Token MUST NOT be accepted outside the
-    trust domain named in its `aud`, so this value is meaningful only to Receivers inside that
-    trust domain.
+  - `txn_token` — a Transaction Token [TXN-TOKENS].
+  - `txn_at` — a Transactional Access Token [TXN-AT].
+  - `access_token` — another OAuth 2.0 access token, including a JWT access token carrying
+    `authorization_details` [RFC9396].
   - Additional values MAY be defined by profiling specifications or private agreement.
-- **`credential_id`** — OPTIONAL. The issued credential's `jti`, for correlation with that
-  specific token.
-
-The SET's top-level `txn` claim carries the issued credential's `txn`, as the Receiver sees it
-(§2.3). When the credential is a Transactional Access Token or a Transaction Token, Transmitters
-MUST include it.
-
-The example shows the event as sent to the resource server the token was issued for (§4.13.1):
+- **`credential_id`** — OPTIONAL. Identifier of the issued credential (e.g. the Transaction
+  Token's `txn` or `jti` value), for correlation. For a credential whose identifier differs per
+  audience, such as a Transactional Access Token's `txn`, a Transmitter MUST send each Receiver
+  only the identifier issued for that Receiver's audience, so that `mandate-executed` does not
+  let Receivers correlate transactions the authorization server deliberately kept apart.
+- **`credential_expiry`** — OPTIONAL. Expiration time of the issued credential (NumericDate).
+  Lets a Receiver compute the exposure window of §5.5 without holding the credential.
 
 ```json
 {
   "iss": "https://authority.example.com/",
   "jti": "evt-101",
   "iat": 1700000000,
-  "aud": "https://vendor.partner.example.net/mle",
-  "txn": "k3JdQ9vX2mPz7LwR5tYb8A",
+  "aud": "https://pdp.trust.example.com/mle",
   "sub_id": { "format": "uri", "uri": "wimse://trust.example.com/workload/procurement-negotiator" },
   "events": {
     "https://schemas.openid.net/secevent/mandate/event-type/mandate-executed": {
       "mandate_id": "mandate-2026-q3-0091",
-      "credential_type": "txn_access_token",
-      "credential_id": "0f8b6a4e-2d1c-4b7e-9a3f-6c5d4e3b2a10",
+      "credential_type": "txn_token",
+      "credential_id": "txn:8675309-0042",
       "event_timestamp": 1700000000
     }
   }
@@ -520,14 +583,9 @@ The example shows the event as sent to the resource server the token was issued 
 ```
 
 **Notes:**
-- The vendor's contract system receives the Transactional Access Token with `txn`
-  `k3JdQ9vX2mPz7LwR5tYb8A` and this SET with the same value, and links the two without knowing
-  anything specific to [TXN-AT].
-- This event is the join key for later revocations and suspensions (§2.3). Transmitters MUST NOT
-  sample or filter it on streams to Receivers that rely on it to match revocations to in-flight
-  tokens; they MAY do so on streams used only for audit.
-- The token can reach the resource server before this SET. Receivers MUST tolerate a `txn` they
-  have not yet received an event for, and SHOULD NOT reject a token on that ground alone.
+- `credential_id` carries the issued credential's own identifier — for a Transaction Token, its
+  `txn` or `jti` value — so a Receiver holding that token can match it to this event. This is
+  not the SET-level `txn` claim used to correlate SETs (§2.3); the two only share a name.
 - This event is expected to recur many times per mandate — one mandate may be exercised
   repeatedly before rotation or revocation.
 
@@ -551,7 +609,15 @@ never has to reason about a mandate whose meaning shifted under the same identif
     shorter validity, fewer delegation hops).
   - `expanded` — the successor grants more authority in at least one respect. A change that
     narrows some dimensions and widens others is `expanded`.
-- **`scope_ref`**, **`scope_digest`** — OPTIONAL. For the *successor* mandate, as in §4.13.3.
+
+  The issuing authority computes `change_class` using the comparison rules of the mandate's own
+  format; there is no format-independent comparison (for OAuth grants, see [RFC9396], §6.1).
+  An authority that cannot establish that the successor is no broader than its predecessor MUST
+  report `expanded`, so that the Receiver verifies the successor before relying on it (§5.9).
+- **`scope_ref`**, **`scope_digest`** — OPTIONAL. For the *successor* mandate, as in §4.11.3.
+- **`expiry`** — OPTIONAL. Expiration time of the *successor* mandate (NumericDate). REQUIRED
+  when the rotation's only change is an earlier expiry, so that a Receiver that does not hold the
+  successor still learns when authority ends (§2.2).
 - **`grace_period_end`** — OPTIONAL. NumericDate until which the previous mandate remains
   acceptable. MUST NOT be present when `change_class` is `narrowed`; a Receiver MUST ignore it
   if present on a `narrowed` event.
@@ -584,7 +650,7 @@ never has to reason about a mandate whose meaning shifted under the same identif
   revoked and the successor as unknown until verified. The example above is a variant of the §1
   scenario: the budget is cut, and instead of withdrawing the mandate the principal narrows it.
 - **`renewal`** carries no change of authority. Its default disclosure class is `internal`
-  (§4.13.1); a relying party that needs continuity learns the successor's identifier when it is
+  (§4.11.1); a relying party that needs continuity learns the successor's identifier when it is
   presented.
 - **`expanded`** is a relaxing signal. A Receiver MUST NOT extend acceptance to the additional
   authority on the strength of this event alone; it MUST first obtain and verify the successor
@@ -598,10 +664,6 @@ never has to reason about a mandate whose meaning shifted under the same identif
   torn down as part of the rotation, using whatever session-management mechanism the deployment
   runs internally. This profile does not surface that session-level detail; `mandate-rotated` is
   the complete public signal.
-- Authority epochs (§5.10): a successor that required fresh authorization by the principal
-  starts a new authority epoch, and the predecessor's authority is then closed as for a
-  revocation. A successor issued without fresh authorization (typically `renewal`) continues the
-  predecessor's epoch.
 
 ### 4.6. mandate-revoked
 
@@ -637,7 +699,6 @@ workload's underlying credential remains valid.
   "jti": "evt-103",
   "iat": 1700000000,
   "aud": "https://vendor.partner.example.net/mle",
-  "txn": "Rk2vQ8sLmN4pZx7Tb1Ye9w",
   "sub_id": { "format": "uri", "uri": "wimse://trust.example.com/workload/procurement-negotiator" },
   "events": {
     "https://schemas.openid.net/secevent/mandate/event-type/mandate-revoked": {
@@ -660,30 +721,17 @@ workload's underlying credential remains valid.
 - A `compromise`-reasoned revocation triggers immediate Receiver action without waiting for
   confirmation, per §5.4.
 - A cascade produces one event per affected mandate; all of them SHOULD carry the same SET `txn`
-  for a given Receiver (the occurrence value of §2.3), and a Transmitter SHOULD emit them only
-  once the whole cascade is committed, so a Receiver never sees a revoked root with
-  apparently-live descendants. The revocation's `txn` is never a token's `txn`, since one
-  revocation can cover many transactions.
-- `effective_at` (§2.2) in the future expresses a scheduled revocation. Until that time the
-  mandate remains valid; a Receiver SHOULD NOT treat a scheduled revocation as immediate.
+  (§2.3), and a Transmitter SHOULD emit them only once the whole cascade is committed, so a
+  Receiver never sees a revoked root with apparently-live descendants.
+- `mandate-revoked` is never scheduled: `effective_at` (§2.2) can only place the revocation at
+  or before the SET's `iat`. A planned end of authority is expressed by shortening the mandate's
+  `expiry` (§4.5), which can still be reversed; a revocation cannot (§5.8).
 - A revocation of a suspended mandate, with or without `suspension_id`, ends the suspension:
   revocation is terminal (§5.8).
-- The exposure window is bounded by whatever short-lived credential `mandate-executed` last
-  issued (e.g. a Transactional Access Token, whose lifetime SHOULD NOT exceed 300 seconds per
-  [TXN-AT] §3.5) — an already-issued credential isn't retroactively invalidated by this event;
-  the point of enforcement is the *next* `mandate-executed`, which the issuing authority should
-  refuse once revoked (for [TXN-AT], with the `transaction_denied` error).
-- A Receiver that keeps the `txn` → `mandate_id` index of §2.3 can close the window earlier, by
-  refusing in-flight tokens whose `txn` maps to the revoked mandate or to a descendant of
-  `cascade_root_mandate_id`.
-- **Pending effects.** After receiving this event, a Receiver MUST NOT commit any pending effect
-  (queued work, a scheduled or retried operation, a delayed side effect) that is attributable to
-  the revoked mandate or, for a cascade, to any descendant of `cascade_root_mandate_id`, unless it
-  has been independently reauthorized under a different mandate. Effects that became irreversible
-  before receipt are not reversed by this event (§5.10).
-- Sending this event, and its successful delivery, do not show that the revocation has taken
-  effect. A Transmitter MUST NOT report a revocation as complete on that basis alone; see
-  `mandate-revocation-enforced` (§4.10) and §5.10.
+- The exposure window is bounded by the longest-lived credential still outstanding under the
+  mandate (e.g. a Transaction Token's own short lifetime) — an already-issued credential isn't
+  retroactively invalidated by this event; the point of enforcement is the *next*
+  `mandate-executed`, which the issuing authority should refuse once revoked.
 
 ### 4.7. mandate-suspended
 
@@ -701,12 +749,24 @@ A suspension ends in exactly one of three ways: `mandate-resumed` for the same `
 It has no timeout: a suspension that is never concluded keeps the mandate suspended until it
 expires.
 
+The issuing authority SHOULD conclude every suspension it places with `mandate-resumed` or
+`mandate-revoked` carrying its `suspension_id`, rather than leaving it to expiry, so that a
+Receiver can tell a review still in progress from one that was dropped. A Receiver whose
+suspension has been open longer than its local policy allows MAY confirm the mandate's status
+with the issuing authority (through `scope_ref` or another status mechanism, §1.4), but MUST NOT
+lift the suspension itself: unlike an advisory signal, a suspension is a directive, and only the
+issuing authority can end it.
+
 **Attributes:**
 
 - **`mandate_id`** — OPTIONAL.
 - **`suspension_id`** — REQUIRED. An identifier for this suspension, assigned by the issuing
   authority, unique per suspended mandate, and the same in every SET about this suspension sent
-  to any Receiver. (A SET's `jti` cannot serve: it differs per Receiver.)
+  to any Receiver. (A SET's `jti` cannot serve: it differs per Receiver.) It is a protocol
+  identifier, needed because one mandate can carry several open suspensions; it MUST NOT be, or
+  reveal, a reference from the authority's internal tools such as a ticket, case or
+  change-request identifier. Pointers to such internal work, and any expected review date, belong
+  in `reason_admin` (subject to §4.11.2) or in the document behind `scope_ref`.
 - **`suspension_type`** — REQUIRED. `direct` or `cascade`, with the same meaning as
   `revocation_type` in §4.6: a suspension applies to every descendant of the suspended mandate.
 - **`cascade_root_mandate_id`** — REQUIRED when `suspension_type` is `cascade`.
@@ -721,7 +781,7 @@ expires.
   Additional values MAY be defined as for §4.6. The value `compromise` MUST NOT be used on this
   event: it denotes a confirmed compromise (§5.4), and a confirmed compromise is a revocation.
 - **`reason_admin`** — OPTIONAL, as defined in Common Optional Claims (§2.2), and restricted by
-  §4.13.2.
+  §4.11.2.
 
 ```json
 {
@@ -816,7 +876,7 @@ not extend the mandate's validity. It is the counterpart of WISE's `workload-ena
 - When the lifted suspension's `reason` was `reported_compromise`, the Receiver MUST NOT resume
   acceptance on the strength of this event alone. It MUST first confirm the mandate's current
   status with the issuing authority through an authenticated channel — for example the
-  `scope_ref` endpoint (§4.13.3), which, where it is offered, SHOULD report a mandate's
+  `scope_ref` endpoint (§4.11.3), which, where it is offered, SHOULD report a mandate's
   suspensions and revocation alongside the artifact. For other reasons the Receiver SHOULD
   confirm in the same way, and MAY resume on the event alone when its stream from the
   Transmitter is configured as authoritative for this mandate's status.
@@ -870,118 +930,7 @@ accompany `mandate-revoked` but does not require one.
   directive to enforce automatically — same posture WISE takes with `anomalous-behavior-detected`
   and `workload-vulnerability-status-changed`.
 
-### 4.10. mandate-revocation-enforced
-
-**Event Type URI:** `.../event-type/mandate-revocation-enforced`
-
-Signals that a Receiver of a `mandate-revoked` event has applied it at its own enforcement points,
-or could not. This event travels in the opposite direction to the others: the Receiver of the
-revocation is its Transmitter, and the issuer of the revoked mandate is its Receiver, over a
-separate SSF stream the issuer configures for this purpose. It turns a revocation from a
-notification into something the issuer can track to completion (§5.10).
-
-A Receiver that accepts `mandate-revoked` SHOULD send this event for each `mandate-revoked` SET it
-receives, once its enforcement for that SET has reached a final state.
-
-**Attributes:**
-
-- **`mandate_id`** — REQUIRED. The `mandate_id` from the `mandate-revoked` SET being acknowledged,
-  exactly as received (including any per-audience form, §2.3).
-- **`acknowledged_jti`** — REQUIRED. The `jti` of the `mandate-revoked` SET being acknowledged.
-- **`enforcement_status`** — REQUIRED. One of:
-  - `enforced` — every enforcement point within the declared `scope` refuses the revoked authority.
-  - `partial` — some enforcement points do; others are known and unresolved.
-  - `failed` — enforcement could not be applied.
-  - `not_applicable` — the Receiver holds no state, tokens, or pending work for this mandate.
-- **`pending_effects`** — REQUIRED. What happened to work admitted before the revocation:
-  `none`, `cancelled`, `fenced` (blocked at commit), or `unresolved`.
-- **`scope`** — OPTIONAL. The classes of consequential effect the status covers, for example
-  `["api", "queue", "storage", "payment"]`. Coarse classes only (§6).
-- **`reason_admin`** — OPTIONAL. Why enforcement is `partial` or `failed`.
-
-`event_timestamp` (§2.1) is when the final state was reached, by the Receiver's clock. The SET's
-`txn` MUST equal the `txn` of the `mandate-revoked` SET being acknowledged (§2.3). Its `sub_id` is
-the `workload` subject of that SET.
-
-```json
-{
-  "iss": "https://vendor.partner.example.net/",
-  "jti": "ack-7731",
-  "iat": 1700000004,
-  "aud": "https://authority.example.com/mle-ack",
-  "txn": "Rk2vQ8sLmN4pZx7Tb1Ye9w",
-  "sub_id": { "format": "uri", "uri": "wimse://trust.example.com/workload/procurement-negotiator" },
-  "events": {
-    "https://schemas.openid.net/secevent/mandate/event-type/mandate-revocation-enforced": {
-      "mandate_id": "mandate-2026-q3-0092",
-      "acknowledged_jti": "evt-103",
-      "enforcement_status": "enforced",
-      "pending_effects": "fenced",
-      "scope": ["api", "queue"],
-      "event_timestamp": 1700000003
-    }
-  }
-}
-```
-
-**Notes:**
-- `enforced` makes a claim about the Receiver's own enforcement points only. It says nothing
-  about systems the Receiver does not control, and the issuer MUST NOT read it that way.
-- A Receiver that does not implement this event is not non-conforming. Its silence makes the
-  closure status `unknown` or `partial` (§5.10), which is the correct outcome when nothing has
-  been confirmed.
-- The same event MAY acknowledge a `mandate-suspended`, with `acknowledged_jti` naming that SET;
-  a deployment that does so tracks suspension enforcement the same way.
-
-### 4.11. mandate-revocation-closure
-
-**Event Type URI:** `.../event-type/mandate-revocation-closure`
-
-OPTIONAL. Sent by the issuer of a revoked mandate to Receivers that need evidence that a
-revocation is complete, such as the principal's organization or an auditor. It is a closure
-receipt in the sense of [WATTS-CLOSURE], encoded as a SET.
-
-**Attributes:**
-
-- **`mandate_id`** — REQUIRED.
-- **`closure_status`** — REQUIRED. One of `propagating`, `closed`, `partial`, `failed`,
-  `unknown`, with the meanings in §5.10.
-- **`receivers_notified`** — OPTIONAL. Number of Receivers sent the `mandate-revoked` event.
-- **`receivers_enforced`** — OPTIONAL. Number that acknowledged `enforced` or `not_applicable`.
-- **`unresolved`** — OPTIONAL. Opaque, per-audience identifiers for Receivers that acknowledged
-  `partial` or `failed` or did not acknowledge within the closure budget.
-- **`closure_budget`** — OPTIONAL. The budget in seconds the issuer applied (§5.10).
-- **`evidence_digest`** — OPTIONAL. A digest of the acknowledgements and audit records the status
-  rests on, so that it can be checked later without disclosing them in the event.
-
-`event_timestamp` (§2.1) is when the status was determined. The SET's `txn` is the occurrence
-value of the revocation decision (§2.3). An issuer MAY send this event more than once for the same
-revocation as the status changes, for example from `propagating` to `closed`; under §5.8 each
-later event supersedes the earlier one for that Receiver.
-
-```json
-{
-  "iss": "https://authority.example.com/",
-  "jti": "evt-110",
-  "iat": 1700000060,
-  "aud": "https://audit.trust.example.com/mle",
-  "txn": "Vb3sN8qLwD1xRt6Yk0Pe4g",
-  "sub_id": { "format": "uri", "uri": "wimse://trust.example.com/workload/procurement-negotiator" },
-  "events": {
-    "https://schemas.openid.net/secevent/mandate/event-type/mandate-revocation-closure": {
-      "mandate_id": "mandate-2026-q3-0092",
-      "closure_status": "closed",
-      "receivers_notified": 3,
-      "receivers_enforced": 3,
-      "closure_budget": 300,
-      "evidence_digest": "sha-256:p8Jc2Ld7Qw0Hs5Nb3Yt9Ra1Ve6Ko4Mi_zUf2Gx7TqA",
-      "event_timestamp": 1700000058
-    }
-  }
-}
-```
-
-### 4.12. Summary: CRUD mapping
+### 4.10. Summary: CRUD mapping
 
 | Action | Event(s) |
 |---|---|
@@ -990,10 +939,9 @@ later event supersedes the earlier one for that Receiver.
 | Use | `mandate-executed` |
 | Pause / unpause | `mandate-suspended` → `mandate-resumed` \| `mandate-revoked` |
 | Delete | `mandate-revoked` |
-| Confirm deletion | `mandate-revocation-enforced` (Receiver → issuer) → `mandate-revocation-closure` (issuer → principal, auditor) |
 | Anomaly (outside CRUD) | `mandate-violation-detected` |
 
-### 4.13. Disclosure and Content Control
+### 4.11. Disclosure and Content Control
 
 An MLE event is a *signal about* a mandate, not the mandate itself. The authoritative content of
 a mandate stays with the authority that issued it. What an event carries on the wire is an
@@ -1001,7 +949,7 @@ identifier, a description of the change, and only as much content as the particu
 needs. This section defines how a Transmitter controls that, at four levels: which events a
 Receiver gets, which fields appear, how content is referenced rather than copied, and who decides.
 
-#### 4.13.1. Disclosure Classes
+#### 4.11.1. Disclosure Classes
 
 Each event has a default disclosure class:
 
@@ -1016,7 +964,7 @@ Each event has a default disclosure class:
 | `mandate-requested` | `internal` | Reveals intended activity before any authority exists. |
 | `mandate-denied` | `internal` | Reveals internal policy decisions; no relying party exists yet. |
 | `mandate-granted` | `internal` | Relying parties learn of a mandate when it is presented to them; broadcasting grants discloses business activity. |
-| `mandate-executed` | `internal`, plus the audience of the credential | High-frequency; reveals activity patterns (§5.3). Also sent to the resource server a credential was issued for, about that credential only: that Receiver already holds the token, and needs the event as the join key for later revocations (§2.3). |
+| `mandate-executed` | `internal` | High-frequency; reveals activity patterns (§5.3). |
 | `mandate-rotated` (`renewal`) | `internal` | No change of authority. |
 | `mandate-rotated` (`narrowed`) | `relying` | Tightening; relying parties must stop accepting the removed authority. |
 | `mandate-rotated` (`expanded`) | `internal` | Relaxing (§5.9); relying parties verify the successor when it is presented. |
@@ -1024,11 +972,9 @@ Each event has a default disclosure class:
 | `mandate-suspended` | `relying` | Tightening; relying parties must stop accepting at once. |
 | `mandate-resumed` | `relying` | Relaxing, but relying parties that received the suspension need it to restore the mandate (§4.8). Sent only to Receivers that were sent the suspension. |
 | `mandate-violation-detected` | `relying` | Relying parties of the affected mandate need it to evaluate pending actions. |
-| `mandate-revocation-enforced` | — | Not delivered by the issuer: sent by a Receiver back to the issuer, on a stream the issuer configures with that Receiver (§4.10). |
-| `mandate-revocation-closure` | `internal` | Closure evidence for the principal's organization and auditors; reveals which Receivers did not confirm (§6). |
 
 A Transmitter MUST NOT deliver an event outside its default class unless the disclosure policy
-for that Receiver (§4.13.4) permits it, and SHOULD deliver every `relying`-class event to every
+for that Receiver (§4.11.4) permits it, and SHOULD deliver every `relying`-class event to every
 Receiver it knows to be relying on the affected mandate. Within a class, a Transmitter SHOULD
 deliver events only for subjects the Receiver has a stake in, using SSF stream subject
 management, rather than every mandate the Transmitter knows about.
@@ -1038,7 +984,7 @@ Delivery of event types to a stream is controlled through the SSF stream configu
 it to that type: the Transmitter MUST omit from `events_delivered` any type the Receiver is not
 entitled to under this section.
 
-#### 4.13.2. Field-Level Minimization
+#### 4.11.2. Field-Level Minimization
 
 Even within an entitled event, the Transmitter tailors the payload per Receiver:
 
@@ -1049,14 +995,14 @@ Even within an entitled event, the Transmitter tailors the payload per Receiver:
   `internal` class unless the disclosure policy for that Receiver permits it. Structured fields
   (`reason`, `change_class`, `violation_type`) carry the information a relying party needs to act.
 - **`scope_ref` / `scope_digest`**: may be sent to any entitled Receiver; they disclose nothing
-  about content (§4.13.3).
+  about content (§4.11.3).
 
 Events carrying a `principal` member in a resolvable format, `scope_summary`, or free-text
 reasons MUST be encrypted with JWE [RFC7516] to the specific Receiver when they cross a
 trust-domain boundary — a strengthening of the general SHOULD in §5.1 for exactly the payloads
 that carry content.
 
-#### 4.13.3. Referencing Scope Instead of Copying It
+#### 4.11.3. Referencing Scope Instead of Copying It
 
 - **`scope_digest`** — a digest of the authoritative mandate artifact, as
   `"<alg>:<base64url digest>"` (e.g. `sha-256:...`). It MUST be computed over the complete
@@ -1065,6 +1011,12 @@ that carry content.
   recovered from a bare digest by guessing, whereas the complete artifact contains unpredictable
   values (its identifier and signature). A Receiver that holds a mandate compares digests to
   confirm which version an event concerns; a Receiver that does not hold it learns nothing.
+  Where the mandate is not a single signed artifact — for example an OAuth grant held as a
+  record at the authorization server, whose granted `authorization_details` are exactly the
+  low-entropy content this rule protects — the digest MUST be computed over a canonical
+  serialization [RFC8785] of the authority's authoritative record that includes the mandate's
+  identifier and at least 128 bits of unpredictable value bound to that record, never over the
+  `authorization_details` or `scope` alone.
 - **`scope_ref`** — an `https` URI from which an authorized Receiver can obtain the
   authoritative mandate. Dereferencing MUST require the Receiver to authenticate, and the
   endpoint MUST apply the same disclosure policy as the event stream. The Receiver MUST verify
@@ -1072,7 +1024,7 @@ that carry content.
   SHOULD fetch only from endpoints within the Transmitter's own trust domain. A Transmitter
   SHOULD omit `scope_ref` for Receivers not entitled to the content.
 
-#### 4.13.4. Who Decides
+#### 4.11.4. Who Decides
 
 Disclosure is decided by the party that granted the authority, not by the Transmitter's
 convenience. The issuing authority defines a disclosure policy — for each mandate, or for a class
@@ -1080,9 +1032,9 @@ of mandates — stating which Receivers or Receiver classes may receive which ev
 The policy MAY travel with the mandate itself, so that a mandate carries its own rule for who may
 learn of changes to it. This profile does not define the policy's encoding; it requires only that:
 
-- the Transmitter enforces the applicable policy at both stream level (§4.13.1) and field level
-  (§4.13.2);
-- in the absence of a policy, the defaults in §4.13.1 and §4.13.2 apply;
+- the Transmitter enforces the applicable policy at both stream level (§4.11.1) and field level
+  (§4.11.2);
+- in the absence of a policy, the defaults in §4.11.1 and §4.11.2 apply;
 - a policy may widen disclosure beyond the defaults, but MUST NOT suppress delivery of
   `relying`-class events to Receivers relying on the affected mandate. Withholding a revocation
   or narrowing from the parties who rely on the authority defeats the purpose of this profile.
@@ -1121,10 +1073,7 @@ consistent with the WIMSE architecture's treatment of agentic intermediaries.
 `mandate-executed` is expected to fire once per transaction and may recur at high frequency for
 an active workload — an unbounded or malicious event volume from a compromised Transmitter is a
 plausible resource exhaustion vector against a Receiver processing every event. Receivers SHOULD
-apply rate limiting independent of any single event's validity. A Receiver that uses
-`mandate-executed` as a join key (§2.3) SHOULD bound its `txn` → `mandate_id` index by the
-lifetime of the credentials it indexes; entries older than the longest credential lifetime in use
-can be dropped.
+apply rate limiting independent of any single event's validity.
 
 For `mandate-revoked` with `revocation_type: cascade`, a Receiver that walks descendant mandates
 in response SHOULD perform this cheaply-checkable field comparison before any expensive lookup or
@@ -1132,7 +1081,7 @@ policy evaluation.
 
 ### 5.4. Compromise Response
 
-This section states for MLE the behavior WISE `-03` requires of its own events; it is restated
+This section states for MLE the behavior WISE `-04` requires of its own events; it is restated
 rather than inherited because MLE is not a WISE profiling specification (§1.2).
 
 Upon receiving any MLE event that carries a `reason` of `compromise` — regardless of event type,
@@ -1165,14 +1114,16 @@ mandate to in-flight work.
 ### 5.5. Relationship to Credential Freshness — the exposure window
 
 A `mandate-revoked` event does not retroactively invalidate a credential already issued via a
-prior `mandate-executed` event (e.g. an already-issued Transactional Access Token or Transaction
-Token). The credential remains
+prior `mandate-executed` event (e.g. an already-issued Transaction Token). The credential remains
 valid for whatever lifetime it was issued with. The actual enforcement point is the *next*
 `mandate-executed` request, which the issuing authority is expected to refuse once the mandate is
-revoked. The resulting exposure window is bounded by the shortest-lived credential type in use —
-this is a real, quantifiable bound a deployment can state, not a gap to hide. For Transactional
-Access Tokens the bound is at most 300 seconds ([TXN-AT] §3.5). Receivers that keep the join-key
-index of §2.3 can close it sooner.
+revoked. For OAuth-issued credentials this is the check an authorization server already performs
+against the underlying grant on every token request ([RFC9396], §6). The resulting exposure window
+is bounded by the *longest*-lived credential still outstanding under the mandate — with
+Transactional Access Tokens, by their short lifetime [TXN-AT]. This is a real, quantifiable bound
+a deployment can state, not a gap to hide; `credential_expiry` on `mandate-executed` (§4.4) lets a
+Receiver compute it. A Receiver that holds a still-valid credential issued under a revoked or
+suspended mandate SHOULD stop accepting it on receipt of the event rather than wait for expiry.
 
 ### 5.6. Composition and Non-Sufficiency
 
@@ -1224,7 +1175,7 @@ The two are therefore processed differently:
 - Tightening events SHOULD be acted on upon receipt of a valid SET, without first fetching the
   mandate (§5.4, §4.5).
 - Relaxing events MUST NOT by themselves cause a Receiver to accept additional authority. The
-  Receiver accepts authority only on verifying the authoritative mandate itself (§4.5, §4.13.3,
+  Receiver accepts authority only on verifying the authoritative mandate itself (§4.5, §4.11.3,
   §5.6). `mandate-resumed` restores authority the Receiver already held rather than adding new
   authority, so §4.8 sets a graduated rule: confirmation is REQUIRED after a reported
   compromise and RECOMMENDED otherwise. An attacker who controls a Transmitter, or a misconfigured one, can then at worst cause
@@ -1233,64 +1184,6 @@ The two are therefore processed differently:
 This mirrors the observation that, for any signal able to relax a prior restriction, a spurious
 relaxation suppresses protection silently and so warrants more assurance than a spurious
 tightening.
-
-A `closed` status in `mandate-revocation-closure` is relaxing in the same sense: a party that
-relies on it proceeds as if the revoked authority could no longer act. It is protected by the
-integrity rules of §5.10.
-
-### 5.10. Revocation Closure
-
-[WATTS-CLOSURE] distinguishes a revocation request, the invalidation of authority, and
-*revocation closure*: the condition that, within a declared scope, no remaining path from the
-revoked authority can produce a new consequential effect. This profile adopts that distinction.
-
-**Authority epochs.** The authority a mandate confers forms one authority epoch, from
-`mandate-granted` until it is revoked, expires, or is superseded by a successor that required
-fresh authorization from the principal (§4.5). A new mandate granted after a revocation is a new
-epoch. Evidence that one epoch is closed MUST NOT be used as evidence about another.
-
-**What signals establish.** Sending `mandate-revoked` puts a revocation into the *propagating*
-state. Neither sending it nor its successful delivery (an SSF Push response, or a Poll
-acknowledgement) establishes that any Receiver has stopped honoring the revoked authority. An
-issuer MUST NOT report a revocation as closed on the basis of delivery alone.
-
-**Closure states.** An issuer that tracks closure SHOULD use these states, matching
-[WATTS-CLOSURE] §6:
-
-| State | Meaning in this profile |
-|---|---|
-| `propagating` | `mandate-revoked` has been sent; acknowledgements are outstanding. |
-| `closed` | The issuer's own issuance point refuses the mandate, and every Receiver sent the revocation has acknowledged `enforced` or `not_applicable` with `pending_effects` other than `unresolved`. |
-| `partial` | At least one Receiver acknowledged `partial`, or reported `pending_effects: unresolved`. |
-| `failed` | At least one Receiver acknowledged `failed`, or the closure budget expired with acknowledgements outstanding and the issuer treats that as failure. |
-| `unknown` | Acknowledgements are missing and the issuer cannot otherwise determine the state. |
-
-`partial`, `failed`, and `unknown` MUST NOT be treated as `closed`. A party that needs closure
-before continuing a sensitive action SHOULD fail closed in any of them. `closed` always refers to
-the declared scope: the issuer's own enforcement plus the Receivers it sent the revocation to. It
-never implies closure in systems outside that set.
-
-**Closure budget.** A deployment MAY declare a closure budget: the time it allows from the
-revocation decision to closure. Where Transactional Access Tokens are in use, paths that no
-Receiver acknowledges are still bounded by the token lifetime (at most 300 seconds per [TXN-AT]
-§3.5), so the budget can be set from that bound. Issuers SHOULD measure the budget on their own
-clock and SHOULD NOT compare timestamps from different Receivers as if they shared one.
-
-**Pending effects.** Closure concerns new effects. Work admitted before the revocation but
-committed after it is a new effect and is covered by the rule in §4.6. Effects that became
-irreversible before a Receiver received the revocation are not reversed, and their existence does
-not by itself mean closure failed.
-
-**Integrity.** A forged `closed` status could lead a party to proceed as if revoked authority could
-no longer act. `mandate-revocation-enforced` and `mandate-revocation-closure` SETs MUST be signed,
-and an issuer MUST accept acknowledgements only on a stream it configured with that Receiver,
-signed with keys published for that stream's Transmitter. An acknowledgement whose
-`acknowledged_jti`, `mandate_id`, and `txn` do not match a `mandate-revoked` SET the issuer sent
-to that Receiver MUST be rejected.
-
-**Fan-in.** A large cascade produces one acknowledgement per Receiver per affected mandate.
-Issuers SHOULD rate-limit acknowledgement streams and MAY aggregate by `txn`; aggregation MUST NOT
-turn an outstanding or `partial` acknowledgement into `closed`.
 
 ## 6. Privacy Considerations
 
@@ -1313,7 +1206,7 @@ disclose the `principal` member only to Receivers that need it for the stated ma
 and SHOULD consider a Receiver-scoped or pairwise identifier for the `principal` member where a
 globally stable identifier isn't required.
 
-**Content minimization:** the disclosure classes and field-level rules of §4.13 are this profile's
+**Content minimization:** the disclosure classes and field-level rules of §4.11 are this profile's
 primary privacy control. In particular, mandates often encode commercial terms (spending limits,
 counterparties, negotiation scope). Those terms belong in the authoritative mandate, reachable
 through `scope_ref` by entitled Receivers, not in event payloads. A Transmitter that copies them
@@ -1322,20 +1215,7 @@ the principal's business activity.
 
 **Activity patterns:** even with minimized payloads, the timing and frequency of events — above
 all `mandate-executed` — reveal what a workload and its principal are doing. Restricting those
-events to the `internal` class (§4.13.1) is the main mitigation.
-
-**Correlation through `txn` and `mandate_id`:** a value identical across Receivers lets
-Receivers in different organizations link their records. Per-audience `txn` and `mandate_id`
-(§2.3) avoid this, matching the per-audience `txn` of [TXN-AT] §3.3 and the guidance in
-[RFC8417] §6. The Transmitter can still recompute every value for audit; it needs to retain
-retired derivation keys for as long as it requires that capability.
-
-**Acknowledgements reveal enforcement topology:** `mandate-revocation-enforced` tells the issuer
-which kinds of systems a Receiver runs and how it handles pending work. Receivers SHOULD report
-`scope` as coarse classes only, never host, queue, or service names. `mandate-revocation-closure`
-SHOULD identify unresolved Receivers only by opaque, per-audience identifiers, so that the
-principal or auditor receiving it does not learn the issuer's full list of relying parties
-([WATTS-CLOSURE] §13).
+events to the `internal` class (§4.11.1) is the main mitigation.
 
 **Retention:** event payloads containing `principal` and `scope_summary` SHOULD be retained only
 as long as needed for the stated audit/enforcement purpose, consistent with purpose limitation.
@@ -1376,18 +1256,56 @@ Tokens", RFC 9493, December 2023, <https://www.rfc-editor.org/rfc/rfc9493>.
 2025, <https://openid.net/specs/openid-caep-1_0.html>.
 
 [WISE] Lombardo, J., Sneeggen, D., O'Dell, S., and P. Kasselman, "OpenID WISE Profile
-Specification 1.0 - draft 03", OpenID Foundation Shared Signals Working Group, 2026,
-<https://identitymonk.github.io/openid-wise/>.
+Specification 1.0 - draft 04", OpenID Foundation Shared Signals Working Group, November 2026,
+<https://openid.github.io/ssf-wise-profile/events-rework/>.
 
 [TXN-TOKENS] Tulshibagwale, A., Fletcher, G., and P. Kasselman, "Transaction Tokens",
 draft-ietf-oauth-transaction-tokens-11 (work in progress), July 2026,
 <https://datatracker.ietf.org/doc/draft-ietf-oauth-transaction-tokens/>.
 
-[TXN-AT] Tulshibagwale, A., "Transactional Access Tokens",
-draft-tulshi-oauth-transactional-access-tokens-00 (work in progress), September 2026,
-<https://datatracker.ietf.org/doc/draft-tulshi-oauth-transactional-access-tokens/>.
+[RFC8785] Rundgren, A., Jordan, B., and S. Erdtman, "JSON Canonicalization Scheme (JCS)",
+RFC 8785, June 2020, <https://www.rfc-editor.org/rfc/rfc8785>.
 
 ### 7.2. Informative References
+
+[RFC7009] Lodderstedt, T., Ed., Dronia, S., and M. Scurtescu, "OAuth 2.0 Token Revocation",
+RFC 7009, August 2013, <https://www.rfc-editor.org/rfc/rfc7009>.
+
+[RFC8693] Jones, M., Nadalin, A., Campbell, B., Ed., Bradley, J., and C. Mortimore, "OAuth 2.0
+Token Exchange", RFC 8693, January 2020, <https://www.rfc-editor.org/rfc/rfc8693>.
+
+[RFC9396] Lodderstedt, T., Richer, J., and B. Campbell, "OAuth 2.0 Rich Authorization
+Requests", RFC 9396, May 2023, <https://www.rfc-editor.org/rfc/rfc9396>.
+
+[GRANT-MGMT] Lodderstedt, T., Low, S., and D. Postnikov, "Grant Management for OAuth 2.0",
+OpenID Foundation FAPI Working Group, <https://openid.net/specs/oauth-v2-grant-management.html>.
+
+[TXN-AT] Tulshibagwale, A., "Transactional Access Tokens",
+draft-tulshi-oauth-transactional-access-tokens-01 (work in progress), November 2026,
+<https://datatracker.ietf.org/doc/draft-tulshi-oauth-transactional-access-tokens/>.
+
+[STATUS-LIST] Looker, T., Bastian, P., and C. Bormann, "Token Status List (TSL)",
+draft-ietf-oauth-status-list (work in progress),
+<https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/>.
+
+[CHEN-REVOCATION] Chen, M. and L. Su, "OAuth 2.0 Agent Authorization Explicit Revocation",
+draft-chen-oauth-agent-revocation (work in progress).
+
+[WATTS-CLOSURE] Watts, "Revocation Closure and Authority Epochs for Agent Delegation",
+draft-watts-oauth-agent-revocation-closure (work in progress).
+
+[YOSSIF-MANDATE] Yossif, M. K., "Problem Statement: Verifiable Human Mandates for Autonomous
+Agent Actions", draft-yossif-agent-mandate-problem (work in progress).
+
+[AP2] "Agent Payments Protocol (AP2)", <https://ap2-protocol.org/>.
+
+[NANDAKUMAR-REVOCATION] Nandakumar, S. and C. Jennings, "Security Events for Revocation of Agent
+Delegations", draft-nandakumar-oauth-delegation-revocation-00 (work in progress), November 2026,
+<https://datatracker.ietf.org/doc/draft-nandakumar-oauth-delegation-revocation/>.
+
+[PACE-AUTHZ] Nandakumar, S. and C. Jennings, "PACE Authorization: Delegation and Action
+Approval", draft-nandakumar-agentproto-pace-authz-00 (work in progress), November 2026,
+<https://datatracker.ietf.org/doc/draft-nandakumar-agentproto-pace-authz/>.
 
 [RISC] Scurtescu, M., et al., "OpenID RISC Profile Specification 1.0", 2025,
 <https://openid.net/specs/openid-risc-1_0-final.html>.
@@ -1396,75 +1314,88 @@ draft-tulshi-oauth-transactional-access-tokens-00 (work in progress), September 
 System Environment (WIMSE) Architecture", 2026,
 <https://www.ietf.org/archive/id/draft-ietf-wimse-arch-07.html>.
 
-[WATTS-CLOSURE] Watts, D., "Revocation Closure for Agentic Authorization Systems",
-draft-watts-oauth-agent-revocation-closure-01 (work in progress), October 2026,
-<https://datatracker.ietf.org/doc/draft-watts-oauth-agent-revocation-closure/>.
-
-[CHEN-REVOKE] Chen, M. and L. Su, "OAuth 2.0 Agent Authorization Explicit Revocation",
-draft-chen-oauth-agent-revocation-00 (work in progress), April 2026,
-<https://datatracker.ietf.org/doc/draft-chen-oauth-agent-revocation/>.
-
 ## 8. Open Questions for the Working Group
 
 - **Suspension status endpoint** — §4.8 requires a Receiver to confirm status before resuming
   after a reported compromise, and suggests the `scope_ref` endpoint report suspensions. Should
-  this profile define that status response, or leave it to the mandate format?
-- **Namespace and registry** — WISE `-03` establishes a "WISE Event Types" IANA registry
+  this profile define that status response, leave it to the mandate format, or point to an
+  existing pull mechanism such as Token Status List [STATUS-LIST], whose `SUSPENDED` status
+  already matches this case?
+- **OAuth grants as the default mandate** — §1.4 maps `mandate_id` to Grant Management's
+  `grant_id` and the enforcement point to RAR's token-request check. Should MLE include a short
+  OAuth binding (grant → mandate, token exchange → child mandate, Transactional Access Token →
+  `mandate-executed`), or leave that to a separate profile? Grant Management's query API is
+  available only to the client that holds the grant, so it cannot serve as `scope_ref` for a
+  resource server as it stands.
+- **Namespace and registry** — WISE `-04` establishes a "WISE Event Types" IANA registry
   (Specification Required) under its own base URI. Registering MLE events there would make MLE a
   WISE extension, which this profile is deliberately not (§1.2). The working assumption is a
   separate "MLE Event Types" registry under the `/secevent/mandate/` base URI, using the same
   registration policy and expert criteria as WISE's. Is that the right call, or is a shared
   registry with distinct prefixes preferable?
+- **Token-chain subjects** — [NANDAKUMAR-REVOCATION] identifies a delegated token by a
+  `delegation` subject format (`iss`, `jti`). Should MLE accept that format as the Simple Subject
+  of `mandate-revoked` when a mandate is carried as a single token, so that one revocation
+  can be expressed consistently in both vocabularies?
+- **Failed rotation** — WISE `-04` gives `credential-rotated` a REQUIRED `status`
+  (`succeeded`/`failed`). Should `mandate-rotated` report a failed renewal the same way, or is a
+  failed renewal simply the absence of a successor before `expiry`?
 - **`mandate-rotated` naming** — with `change_class`, this event now covers any replacement of a
   mandate by a successor, including narrowing and widening, not only routine renewal. Would
   `mandate-superseded` be a clearer name?
-- **Disclosure policy encoding** — §4.13.4 requires an issuer-defined disclosure policy but leaves
+- **Disclosure policy encoding** — §4.11.4 requires an issuer-defined disclosure policy but leaves
   its encoding out of scope. Is a common encoding worth standardizing (for example as a claim in
   the mandate token), or should it remain deployment-specific?
-- **Relationship to Transactional Access Tokens** — [TXN-AT] separates durable consent and
-  client authority from per-transaction tokens; this profile signals changes to the durable half.
-  Two ways to link a revocation to in-flight tokens are possible: the Receiver-side `txn` →
-  `mandate_id` index of §2.3, which needs no change to [TXN-AT], or an AS-asserted, per-audience
-  mandate reference in the Transactional Access Token's `tctx`, which removes the dependency on
-  `mandate-executed` delivery. Which should be primary, and should both be allowed? [TXN-AT]
-  Appendix C also asks whether the AS should be able to end a transaction before its handle
-  expires; `mandate-revoked` and `mandate-suspended` sent to the resource servers holding live
-  tokens are one answer.
-- **Who transmits** — [TXN-AT] has the AS evaluate policy for every token, so the AS is the
-  natural Transmitter for `mandate-executed`. Where the mandate is managed elsewhere, the AS needs
-  to receive MLE events itself. Should the profile say which party transmits which events?
-- **Revocation closure** — `mandate-revocation-enforced` makes every Receiver of a revocation also
-  a Transmitter, back to the issuer. Is that cost acceptable, or should acknowledgements be
-  limited to Receivers that hold pending work or in-flight tokens? Should `closed` require an
-  acknowledgement from every Receiver, or may an issuer declare a Receiver out of scope when its
-  only remaining exposure is bounded by a short credential lifetime? And should the closure
-  receipt stay in this profile, or move to a separate profile of [WATTS-CLOSURE] that other
-  revocation mechanisms (for example [CHEN-REVOKE]) could also use?
+- **Relationship to Transaction Tokens and Transactional Access Tokens** — `mandate-executed`'s
+  `credential_type` values `txn_token` and `txn_at` are intended as concrete bridges to
+  [TXN-TOKENS] and [TXN-AT]. Feedback on whether this is the right level of coupling, or whether
+  it should be looser, would be useful.
 
 ## Document History
 
-**30 October 2026 — `txn` and Transactional Access Tokens; revocation closure**
+**21 November 2026 — follow-ups from WISE Draft-05 issues (#32/SSF #359, #40, #41)**
 
-- §2.3 rewritten after re-reading [RFC8417] §2.2: the SET `txn` and a token's `txn` are the same
-  claim, meant to correlate related JWTs, SET or not. The earlier statement that they were
-  unrelated is withdrawn. `txn` now depends on the scope of the event (the token's `txn` for
-  transaction-scoped events, a per-occurrence value otherwise), occurrence values and
-  `mandate_id` SHOULD be derived per audience, and `mandate-executed` becomes the join key between
-  a revocation and in-flight tokens.
-- `mandate-executed` (§4.4): new `credential_type` `txn_access_token` for Transactional Access
-  Tokens [TXN-AT]; `txn_token` limited to Receivers inside the issuing trust domain;
-  `credential_id` is now the token's `jti`; the SET MUST carry the token's `txn`; no sampling on
-  streams that use it as the join key. §4.13.1: also delivered to the credential's own audience.
-- `mandate-revoked` (§4.6): pending-effects rule; sending or delivering the event is not evidence
-  that it took effect; exposure window stated for [TXN-AT] (at most 300 seconds).
-- New §4.10 `mandate-revocation-enforced` (Receiver → issuer acknowledgement) and §4.11
-  `mandate-revocation-closure` (optional closure receipt), and new §5.10 Revocation Closure,
-  adopting the closure model of [WATTS-CLOSURE]: authority epochs, closure states, closure budget,
-  integrity, and fan-in. §4.5 notes when a rotation starts a new epoch.
-- §5.3, §5.5, §5.9 and §6 updated accordingly. References: [TXN-TOKENS] updated to `-11`; added
-  [TXN-AT], [WATTS-CLOSURE], [CHEN-REVOKE]. Open Questions: Transaction Tokens question replaced by
-  Transactional Access Tokens, "who transmits", and revocation closure.
-- Renumbered: the CRUD summary is now §4.12, and Disclosure and Content Control §4.13.
+- §2.2 `effective_at`: MUST NOT be later than the SET's `iat` (SETs report what has happened;
+  a future-dated change could not be cancelled, and revocation is terminal). An earlier value is
+  allowed and means "effective since". A planned end of authority is a `mandate-rotated`
+  (`narrowed`) with an earlier `expiry`; other planned changes are held by the Transmitter.
+- `mandate-rotated`: new OPTIONAL `expiry` for the successor, REQUIRED when the only change is
+  an earlier expiry.
+- `mandate-revoked`: the scheduled-revocation note is replaced accordingly.
+- `mandate-suspended`: the issuing authority SHOULD conclude every suspension; a Receiver MAY
+  re-check a long-open suspension but MUST NOT lift it itself. `suspension_id` MUST NOT be an
+  internal ticket or case reference; such pointers go in `reason_admin` or behind `scope_ref`.
+
+**21 November 2026 — aligned to WISE `-04`**
+
+- §1.2 boundary rewritten for WISE `-04`: `workload-degraded`/`workload-restored` are replaced by
+  `workload-trust-level-change` (`full`/`reduced`/`restricted`/`minimal`); added the boundary with
+  WISE's consolidated `policy-changed`.
+- WISE version references in §1.2, §2.1, §2.3, §5.4 and §8 moved to `-04`; [WISE] reference
+  updated.
+- §1.4: added [NANDAKUMAR-REVOCATION] (`delegation-revoked` SET) and [PACE-AUTHZ].
+- Open Questions: token-chain subjects; failed rotation.
+- The rules MLE mirrors (`event_timestamp` REQUIRED, `effective_at`, shared `txn`,
+  Compromise Response reaching profiling specifications, "WISE Event Types" registry under
+  Specification Required) are unchanged in `-04`.
+
+**19 November 2026 — landscape alignment (OAuth, RAR, Transactional Access Tokens)**
+
+- New §1.4, Relationship to Other Specifications: CAEP/RISC/WISE; OAuth grants, RAR and Grant
+  Management; Transaction Tokens and Transactional Access Tokens; Token Exchange; revocation and
+  status mechanisms (RFC 7009, Token Status List, agent revocation and closure proposals);
+  mandate formats (AP2, mandate problem statement). Notational Conventions renumbered §1.5.
+- §2.3: the SET `txn` is distinguished from every OAuth-token `txn`, including the per-audience
+  `txn` of Transactional Access Tokens.
+- `mandate-executed`: new `credential_type` values `txn_at` and `access_token`; per-audience
+  `credential_id` rule; new OPTIONAL `credential_expiry`.
+- `mandate-rotated`: `change_class` is computed by the issuing authority under the mandate
+  format's own comparison rules; when narrowing cannot be established, `expanded`.
+- §4.11.3: `scope_digest` rule for mandates that are records rather than signed artifacts.
+- §5.5 and §4.6 Notes: exposure window corrected to the longest-lived *outstanding* credential
+  (was "shortest-lived credential type"); RAR token-request check named as the enforcement point.
+- Open Questions: status endpoint now points to Token Status List as a candidate; new question
+  on an OAuth binding.
 
 **14 October 2026 (third revision) — suspension, and reason values**
 
@@ -1485,7 +1416,7 @@ draft-chen-oauth-agent-revocation-00 (work in progress), April 2026,
 
 **14 October 2026 (later) — disclosure and content control**
 
-- New §4.9 (now §4.13): per-event default disclosure classes (`internal` / `relying`) enforced through SSF
+- New §4.9 (now §4.11): per-event default disclosure classes (`internal` / `relying`) enforced through SSF
   stream configuration and subject management; field-level minimization; `scope_ref` /
   `scope_digest` to reference the authoritative mandate instead of copying it; disclosure
   decided by the issuing authority's policy, which may widen but never suppress delivery of
