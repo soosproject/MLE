@@ -4,8 +4,9 @@
 
 **Author:** T. Sato, MyAuberge K.K.
 **Date:** 27 August 2026; revised 14 October 2026 (aligned to WISE `-03`; disclosure control;
-suspension), 19 November 2026 (relationship to OAuth, RAR and Transactional Access Tokens) and
-21 November 2026 (aligned to WISE `-04`) — see Document History
+suspension), 19 November 2026 (relationship to OAuth, RAR and Transactional Access Tokens),
+21 November 2026 (aligned to WISE `-04`) and 28 November 2026 (externally ordered changes) —
+see Document History
 **Status:** Initial review draft — not yet submitted, prepared for discussion
 
 **Base URI:** `https://schemas.openid.net/secevent/mandate/event-type/` *(placeholder — open to
@@ -243,6 +244,17 @@ differently across these efforts: an AP2 Intent Mandate records what the user wa
 "what" of §1.3) as well as the bounds within which the agent may act unattended (the "may"); it
 is the latter that MLE events concern.
 
+**Emergency orders from public authorities.** Legislation has been proposed that would let a
+public authority order the operator of an AI system to throttle, restrict, suspend or shut it
+down. The proposed U.S. AI Kill Switch Act [HR9917], for example, would require a covered entity
+to be able to suspend access "with respect to an account, user, or use pattern", and, upon an
+order, to notify each operator or user of the order and of the extent to which they might be
+affected, and to confirm to the authority that the order has been carried out. MLE does not implement any such
+regime and is not specific to any jurisdiction. Where an order changes the authority held by
+workloads, however, the parties relying on that authority need to learn of it the same way they
+learn of any other mandate change; MLE is that channel. §4.12 states how an order is reflected
+in MLE events, and §5.10 what evidence of delivery a Transmitter can keep.
+
 ### 1.5. Notational Conventions
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT",
@@ -292,6 +304,15 @@ form WISE reuses them; `effective_at` is defined as in [WISE]:
   after that time MUST apply the event-specific processing requirements immediately on receipt.
   It does not override event-specific processing requirements. A Receiver that receives an
   `effective_at` later than the SET's `iat` MUST treat it as equal to `iat`.
+- **`order`** — OPTIONAL. Identifies an order, from an authority outside the issuing trust
+  domain, that the event carries out (§4.12). A JSON object with the members:
+  - `authority` — REQUIRED. A URI identifying the authority that issued the order.
+  - `order_ref` — OPTIONAL. The identifier of the order as assigned by that authority. Subject
+    to §4.11.2.
+
+  The claim identifies the order; it never carries the order's content or any detail of the
+  incident behind it. It is the Transmitter's assertion, not evidence of the order, and changes
+  nothing in how a Receiver processes the event (§4.12).
 
   A change planned for a future time is not sent in advance. Where the planned change is the end
   of a mandate's authority (e.g. "authority ends at quarter close"), the issuing authority
@@ -688,6 +709,11 @@ workload's underlying credential remains valid.
     time.
   - `operator_override` — an administrator of the issuing trust domain revoked the mandate on
     its own authority, rather than on the principal's behalf or on a detected condition.
+  - `external_order` — the mandate was revoked to carry out an order from an authority outside
+    the issuing trust domain. The event MUST carry the `order` claim (§2.2). Because orders can
+    be reconsidered or overturned, and revocation is terminal (§5.8), a Transmitter SHOULD use
+    `mandate-suspended` with the same reason instead, unless the order itself ends the authority
+    permanently (§4.12).
 - **`suspension_id`** — OPTIONAL. Present when this revocation concludes a suspension (§4.7):
   the `suspension_id` of that suspension. For a cascade, each derived event carries the
   `suspension_id` of the suspension it concludes for its own mandate, where there is one.
@@ -777,6 +803,11 @@ issuing authority can end it.
     acted outside the mandate; the report is not yet confirmed.
   - `pending_review` — the issuing authority, the principal, or an administrator paused the
     mandate pending a decision.
+  - `external_order` — an authority outside the issuing trust domain, with power to bind the
+    issuing authority, ordered the mandate stopped. Unlike `reported_compromise`, this is not an
+    unconfirmed report but a directive the issuing authority must follow. The event MUST carry
+    the `order` claim (§2.2). The suspension is lifted when the order is lifted, withdrawn or
+    overturned, and becomes a revocation if the order so requires (§4.12).
 
   Additional values MAY be defined as for §4.6. The value `compromise` MUST NOT be used on this
   event: it denotes a confirmed compromise (§5.4), and a confirmed compromise is a revocation.
@@ -873,8 +904,8 @@ not extend the mandate's validity. It is the counterpart of WISE's `workload-ena
 
 - `mandate-resumed` is a relaxing signal (§5.9). It lifts only the suspension it names; it
   never lifts a different suspension and never restores a revoked or expired mandate.
-- When the lifted suspension's `reason` was `reported_compromise`, the Receiver MUST NOT resume
-  acceptance on the strength of this event alone. It MUST first confirm the mandate's current
+- When the lifted suspension's `reason` was `reported_compromise` or `external_order`, the
+  Receiver MUST NOT resume acceptance on the strength of this event alone. It MUST first confirm the mandate's current
   status with the issuing authority through an authenticated channel — for example the
   `scope_ref` endpoint (§4.11.3), which, where it is offered, SHOULD report a mandate's
   suspensions and revocation alongside the artifact. For other reasons the Receiver SHOULD
@@ -903,8 +934,13 @@ accompany `mandate-revoked` but does not require one.
 **Attributes:**
 
 - **`mandate_id`** — OPTIONAL.
-- **`violation_type`** — OPTIONAL. `scope_exceeded` or `narrowing_violation` (a child mandate
-  claiming authority broader than its parent).
+- **`violation_type`** — OPTIONAL. One of:
+  - `scope_exceeded` — an action beyond the mandate's scope.
+  - `narrowing_violation` — a child mandate claiming authority broader than its parent.
+  - `ended_mandate_use` — an action, or an attempt to obtain a credential, under a mandate that
+    had been revoked, suspended or narrowed, or had expired, at the time of the action. Continued
+    use after a mandate was stopped, for whatever reason, is the clearest evidence that a stop is
+    not taking effect, and matters most when the stop carried out an order (§4.12).
 - **`reason_admin`** — OPTIONAL, as defined in Common Optional Claims (§2.2).
 
 ```json
@@ -929,6 +965,9 @@ accompany `mandate-revoked` but does not require one.
 - A Receiver should treat this as information to evaluate against its own policies, not a
   directive to enforce automatically — same posture WISE takes with `anomalous-behavior-detected`
   and `workload-vulnerability-status-changed`.
+- `ended_mandate_use` is often observed first by a Receiver, which sees the attempted action,
+  rather than by the issuing authority. SSF streams flow from Transmitter to Receiver; how a
+  Receiver reports such an observation back is outside this profile (§8).
 
 ### 4.10. Summary: CRUD mapping
 
@@ -940,6 +979,7 @@ accompany `mandate-revoked` but does not require one.
 | Pause / unpause | `mandate-suspended` → `mandate-resumed` \| `mandate-revoked` |
 | Delete | `mandate-revoked` |
 | Anomaly (outside CRUD) | `mandate-violation-detected` |
+| Externally ordered | any tightening event above, carrying `order` (§4.12) |
 
 ### 4.11. Disclosure and Content Control
 
@@ -996,6 +1036,10 @@ Even within an entitled event, the Transmitter tailors the payload per Receiver:
   (`reason`, `change_class`, `violation_type`) carry the information a relying party needs to act.
 - **`scope_ref` / `scope_digest`**: may be sent to any entitled Receiver; they disclose nothing
   about content (§4.11.3).
+- **`order`**: `authority` may be sent to any entitled Receiver. `order_ref` MUST NOT be sent
+  outside the `internal` class unless the disclosure policy for that Receiver permits it: orders,
+  and the incident reports behind them, are often nonpublic, and an identifier can be enough to
+  link Receivers' events to a confidential proceeding.
 
 Events carrying a `principal` member in a resolvable format, `scope_summary`, or free-text
 reasons MUST be encrypted with JWE [RFC7516] to the specific Receiver when they cross a
@@ -1038,6 +1082,63 @@ learn of changes to it. This profile does not define the policy's encoding; it r
 - a policy may widen disclosure beyond the defaults, but MUST NOT suppress delivery of
   `relying`-class events to Receivers relying on the affected mandate. Withholding a revocation
   or narrowing from the parties who rely on the authority defeats the purpose of this profile.
+
+### 4.12. Externally Ordered Changes
+
+An authority outside the issuing trust domain — a regulator, a court, a public body acting under
+emergency powers — may order the issuing authority, or the operator of a system its workloads
+depend on, to restrict or stop that system (§1.4). MLE defines no event for the order itself. It
+signals the changes to mandates that carrying out the order produces, using the events already
+defined above.
+
+#### 4.12.1. Mapping Ordered Measures to Events
+
+Orders are commonly framed as a graduated set of measures. The set below follows the graduated
+framework of [HR9917] (proposed §2220F(b)(1)(A) and (b)(2)(A)) as a representative example; other
+regimes use similar measures under other names.
+
+| Ordered measure | MLE signal |
+|---|---|
+| Stop inference, or terminate access for all users | `mandate-suspended` (or `mandate-revoked`, §4.12.2) for every mandate exercised through the affected system, `cascade` from each root mandate |
+| Suspend access for an account or user | `mandate-suspended` for the mandates held by that account or user and, by `cascade`, those delegated from them |
+| Suspend access for a use pattern | As above, for the mandates the pattern covers. A use pattern is not a subject: the Transmitter resolves it to the mandates concerned, and signals each |
+| Restrict user access; disable or restrict a capability | `mandate-rotated`, `change_class: narrowed`, where the restriction changes what a mandate authorizes |
+| Throttle inference rate or compute allocation | None. A rate or capacity limit that leaves unchanged what a mandate authorizes is not a mandate change |
+| Move operation to a backup system or an earlier version | None in MLE. This changes the workload, not its authority, and is signaled, if at all, by WISE. Whether mandates continue under the replacement is for the issuing authority to decide; if they do not, it signals `mandate-rotated` (`narrowed`) or `mandate-suspended` |
+| Shut down | As for "stop inference" |
+
+A Transmitter MUST NOT signal an ordered measure with a relaxing event (§5.9). Where it cannot
+tell which of a Receiver's mandates a measure affects, it MUST signal the broader set.
+
+#### 4.12.2. Suspension Rather Than Revocation
+
+Orders may be reconsidered, appealed or overturned — [HR9917], for example, provides for a
+petition for reconsideration and for judicial review, neither of which stays the order.
+Revocation is terminal (§5.8), so an ordered stop signaled as a revocation cannot be undone when
+the order is lifted, and every principal would have to grant its mandates again. A Transmitter
+SHOULD therefore carry out an ordered stop with `mandate-suspended`, `reason: external_order`,
+and SHOULD use `mandate-revoked`, `reason: external_order`, only where the order itself ends the
+authority permanently or the issuing authority decides to end it. When the order is lifted, the
+Transmitter concludes the suspension with `mandate-resumed` (§4.8); when it becomes final, with
+`mandate-revoked` carrying the `suspension_id`.
+
+#### 4.12.3. Processing Rules
+
+- Every event that carries out an order MUST carry the `order` claim (§2.2). All SETs arising
+  from one order SHOULD share one SET `txn` (§2.3), across MLE and WISE event types and across
+  Receivers. Together, the events a Receiver receives under one `txn` tell it which of the
+  mandates it relies on are affected and how.
+- The `order` claim does not change how an event is processed. An ordered suspension, revocation
+  or narrowing is a tightening signal and is acted on as §5.9 requires; the claim makes it
+  neither more nor less authoritative. A Receiver MUST NOT treat `order` as evidence that an order
+  exists, and MUST NOT accept a relaxing event more readily because it carries one.
+- An order may require delivery to Receivers outside an event's default disclosure class. The
+  issuing authority then widens its disclosure policy (§4.11.4) for those events; the content
+  rules of §4.11.2 continue to apply.
+- An order made against an operator may require it to notify parties that hold no mandate and
+  rely on none, such as the end users of a hosted service. Such notification is outside this
+  profile.
+- Delivery evidence for events sent under an order is addressed in §5.10.
 
 ---
 
@@ -1185,6 +1286,30 @@ This mirrors the observation that, for any signal able to relax a prior restrict
 relaxation suppresses protection silently and so warrants more assurance than a spurious
 tightening.
 
+### 5.10. Evidence of Delivery
+
+An authority that ordered a change (§4.12) may require the party it ordered to confirm that the
+order was carried out, and may verify that confirmation afterwards; [HR9917] would require both.
+A Receiver may later need to show when it learned that a mandate had been stopped. Interference
+with a shutdown instruction can itself be the incident at issue, and showing it requires showing
+that the instruction was delivered.
+
+MLE events are SETs signed by the Transmitter, and SSF delivery already produces an
+acknowledgement: the Receiver's success response in push delivery [RFC8935], or its
+acknowledgement of the SET's `jti` in poll delivery [RFC8936]. For each SET sent to carry out an
+order, a Transmitter SHOULD retain the SET as sent, the Receiver it was addressed to, and whether
+and when its delivery was acknowledged, and SHOULD retry delivery of an unacknowledged SET
+according to the delivery method in use. A Receiver SHOULD retain each such SET with the time it
+applied it. Retained records can be made tamper-evident by registering them with a transparency
+service; this profile does not require one.
+
+This is evidence that a change was signaled and received, not that it was enforced: an
+acknowledgement shows that a Receiver received a suspension, not that it stopped accepting the
+mandate. `mandate-violation-detected` with `violation_type: ended_mandate_use` (§4.9) reports the
+contrary case where it is observed. Showing that authority actually ended across a delegation
+graph is the subject of revocation-closure work [WATTS-CLOSURE], which this profile does not
+define.
+
 ## 6. Privacy Considerations
 
 Unlike WISE's workload-only subject, this profile's Complex Subject explicitly carries a human
@@ -1219,7 +1344,9 @@ events to the `internal` class (§4.11.1) is the main mitigation.
 
 **Retention:** event payloads containing `principal` and `scope_summary` SHOULD be retained only
 as long as needed for the stated audit/enforcement purpose, consistent with purpose limitation.
-This profile does not define retention periods; deployments should state their own.
+This profile does not define retention periods; deployments should state their own. A legal
+obligation to preserve records, such as one accompanying an order (§4.12, §5.10), may require
+longer retention; records so kept are for that obligation only.
 
 ## 7. References
 
@@ -1273,6 +1400,18 @@ RFC 7009, August 2013, <https://www.rfc-editor.org/rfc/rfc7009>.
 
 [RFC8693] Jones, M., Nadalin, A., Campbell, B., Ed., Bradley, J., and C. Mortimore, "OAuth 2.0
 Token Exchange", RFC 8693, January 2020, <https://www.rfc-editor.org/rfc/rfc8693>.
+
+[RFC8935] Backman, A., Ed., Jones, M., Ed., Scurtescu, M., Ansari, M., and A. Nadalin,
+"Push-Based Security Event Token (SET) Delivery Using HTTP", RFC 8935, November 2020,
+<https://www.rfc-editor.org/rfc/rfc8935>.
+
+[RFC8936] Backman, A., Ed., Jones, M., Ed., Scurtescu, M., Ansari, M., and A. Nadalin,
+"Poll-Based Security Event Token (SET) Delivery Using HTTP", RFC 8936, November 2020,
+<https://www.rfc-editor.org/rfc/rfc8936>.
+
+[HR9917] U.S. House of Representatives, "AI Kill Switch Act", H.R. 9917, 119th Congress,
+introduced 23 July 2026 (pending; not enacted),
+<https://www.congress.gov/bill/119th-congress/house-bill/9917/text>.
 
 [RFC9396] Lodderstedt, T., Richer, J., and B. Campbell, "OAuth 2.0 Rich Authorization
 Requests", RFC 9396, May 2023, <https://www.rfc-editor.org/rfc/rfc9396>.
@@ -1350,8 +1489,44 @@ System Environment (WIMSE) Architecture", 2026,
   `credential_type` values `txn_token` and `txn_at` are intended as concrete bridges to
   [TXN-TOKENS] and [TXN-AT]. Feedback on whether this is the right level of coupling, or whether
   it should be looser, would be useful.
+- **An event for the order itself** — §4.12 signals an order only through the per-mandate events
+  it produces, tied by `order` and a shared `txn`. Is an event whose subject is the order needed
+  (for example, so that Receivers holding no affected mandate still learn of it)? Its subject
+  would be neither a workload nor a mandate, so it may belong in a profile shared with WISE
+  rather than in MLE.
+- **`order` as a shared claim** — WISE events such as `workload-disabled` and
+  `credential-revoked` can also carry out orders. Should `order` be defined once, for both
+  profiles, rather than in MLE alone?
+- **Use patterns as subjects** — orders may target a "use pattern" rather than an account or
+  user (§4.12.1). This profile resolves the pattern to mandates. Is a subject format for a
+  pattern worth defining, or is resolution by the Transmitter the right boundary?
+- **Reporting `ended_mandate_use` upstream** — Receivers are usually the first to see a stopped
+  mandate being used (§4.9), but SSF streams flow toward them. Should this profile recommend a
+  reverse stream, from relying party to issuing authority, for this one event?
+- **Mandates across a model change** — when a workload is moved to a backup system or an earlier
+  model version (§4.12.1), should its mandates be presumed to continue, or should the authority
+  be required to state it?
 
 ## Document History
+
+**28 November 2026 — externally ordered changes**
+
+- §1.4: new paragraph on emergency orders from public authorities, citing the proposed U.S. AI
+  Kill Switch Act [HR9917] as an example; MLE stays jurisdiction-neutral.
+- §2.2: new common optional claim `order` (`authority`, `order_ref`) — identifies an order, never
+  its content.
+- `mandate-revoked` and `mandate-suspended`: new `reason` value `external_order`. §4.8: resumption
+  after an ordered suspension requires status confirmation, as after a reported compromise.
+- `mandate-violation-detected`: new `violation_type` `ended_mandate_use`.
+- New §4.12, Externally Ordered Changes: mapping of graduated measures (stop, terminate, suspend
+  by account/user/use pattern, restrict, throttle, roll back, shut down) to existing events — no
+  new event types; ordered stops SHOULD be suspensions, not revocations, since orders can be
+  overturned; processing rules.
+- §4.11.2: `order_ref` restricted to the `internal` class by default. §4.10: CRUD table row.
+- New §5.10, Evidence of Delivery: retention of SETs and SSF delivery acknowledgements
+  [RFC8935]/[RFC8936] for events sent under an order. §6: legal preservation and retention.
+- Open Questions: an event for the order itself; `order` shared with WISE; use-pattern subjects;
+  reporting `ended_mandate_use` upstream; mandates across a model change.
 
 **21 November 2026 — follow-ups from WISE Draft-05 issues (#32/SSF #359, #40, #41)**
 
